@@ -1,7 +1,5 @@
 # Training artifacts and outputs
 RL_outputs/
-loader_actor
-loader_critic
 
 # Environments
 .venv/
