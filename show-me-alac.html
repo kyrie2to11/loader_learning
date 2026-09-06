@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Show Me：ALAC 与 Actor-Critic MPC</title>
+  <style>
+    :root {
+      --bg: #09111f;
+      --panel: #121d30;
+      --ink: #edf4ff;
+      --muted: #9fb0c8;
+      --blue: #55b7ff;
+      --green: #52e0a4;
+      --orange: #ffb45c;
+      --red: #ff7185;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 80% 0, #173053, var(--bg) 42%);
+      color: var(--ink);
+      font:
+        17px/1.55 system-ui,
+        sans-serif;
+    }
+    main {
+      max-width: 1050px;
+      margin: auto;
+      padding: 30px 22px 80px;
+    }
+    h1 {
+      font-size: clamp(30px, 5vw, 58px);
+      line-height: 1.05;
+      margin: 0.2em 0;
+    }
+    h2 {
+      font-size: clamp(25px, 4vw, 42px);
+      margin: 0.2em 0 0.6em;
+    }
+    h3 {
+      margin: 0.2em 0;
+    }
+    .sub,
+    .muted {
+      color: var(--muted);
+    }
+    .slide {
+      display: none;
+      min-height: 74vh;
+      align-content: center;
+    }
+    .slide.active {
+      display: grid;
+      gap: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .card {
+      background: linear-gradient(145deg, #16243a, #101a2b);
+      border: 1px solid #2a3c57;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 16px 50px #0004;
+    }
+    .flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .node {
+      padding: 14px 17px;
+      border-radius: 14px;
+      background: #15243b;
+      border: 2px solid var(--blue);
+      text-align: center;
+      min-width: 120px;
+    }
+    .actor {
+      border-color: var(--orange);
+    }
+    .critic {
+      border-color: var(--green);
+    }
+    .mpc {
+      border-color: var(--red);
+    }
+    .arrow {
+      font-size: 26px;
+      color: var(--muted);
+    }
+    code,
+    .eq {
+      font-family: ui-monospace, monospace;
+    }
+    .eq {
+      font-size: clamp(17px, 2.5vw, 25px);
+      padding: 17px;
+      background: #091321;
+      border-radius: 14px;
+      text-align: center;
+    }
+    .bar {
+      height: 13px;
+      background: #27354a;
+      border-radius: 9px;
+      overflow: hidden;
+    }
+    .bar span {
+      display: block;
+      height: 100%;
+      background: linear-gradient(90deg, var(--red), var(--green));
+      animation: learn 4s ease-in-out infinite;
+    }
+    @keyframes learn {
+      0% {
+        width: 12%;
+      }
+      50% {
+        width: 88%;
+      }
+      100% {
+        width: 12%;
+      }
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th,
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #30415b;
+      text-align: left;
+    }
+    .tag {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #203652;
+      color: #bfe4ff;
+    }
+    .goal {
+      font-size: 24px;
+      color: var(--green);
+    }
+    nav {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      background: #07101ddd;
+      border: 1px solid #30415b;
+      border-radius: 999px;
+      backdrop-filter: blur(12px);
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 9px 15px;
+      background: #25405f;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #35658e;
+    }
+    #count {
+      min-width: 52px;
+      text-align: center;
+      color: var(--muted);
+    }
+    ul {
+      margin: 0.4em 0;
+    }
+    .accent {
+      color: var(--blue);
+    }
+    .warning {
+      color: var(--orange);
+    }
+    @media (max-width: 700px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .slide {
+        min-height: auto;
+        padding: 35px 0;
+      }
+      .arrow {
+        transform: rotate(90deg);
+      }
+      .flow {
+        flex-direction: column;
+      }
+    }
+  </style>
+  <main>
+    <section class="slide active">
+      <span class="tag">第 1 课 · 一张图看完整论文</span>
+      <h1>
+        先让 AI 在模拟器里<br /><span class="accent">学会“哪里值得走”</span>
+      </h1>
+      <div class="flow card">
+        <div class="node actor"><b>Actor</b><br />试着驾驶</div>
+        <span class="arrow">→</span>
+        <div class="node"><b>模拟铰接车</b><br />产生新状态</div>
+        <span class="arrow">→</span>
+        <div class="node critic"><b>Critic</b><br />学习未来总代价</div>
+        <span class="arrow">→</span>
+        <div class="node mpc"><b>MPC</b><br />带约束地实际控制</div>
+      </div>
+      <p class="goal">
+        核心：最终交给 MPC 的主要知识是 Critic，不是让 Actor 直接控制实车。
+      </p>
+    </section>
+
+    <section class="slide">
+      <span class="tag">第 2 课 · 它到底学什么</span>
+      <h2>没有“正确方向盘答案”</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>输入：现在与目标差多少</h3>
+          <ul>
+            <li>目标在车体坐标系中的 x / y</li>
+            <li>朝向误差 sin / cos</li>
+            <li>铰接角 β、角速度 β̇</li>
+            <li>车辆速度 v</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>输出：下一瞬间怎么动</h3>
+          <ul>
+            <li>铰接角加速度 β̈</li>
+            <li>车辆线加速度 a</li>
+          </ul>
+        </div>
+      </div>
+      <div class="eq">状态 s + 目标 g → Actor π(s,g) → 动作 a → 新状态 s′</div>
+      <p>
+        模拟器把每次经历 <code>(s, a, cost, s′)</code> 放进 Replay
+        Buffer，随机抽出来反复学习。
+      </p>
+    </section>
+
+    <section class="slide">
+      <span class="tag">第 3 课 · Critic 为什么会训练起来</span>
+      <h2>用“下一步的自己”教“现在的自己”</h2>
+      <div class="eq">
+        Critic 目标 = 当前代价 c + γ × 下一状态的预计总代价
+        L<sub>target</sub>(s′)
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>第一次</h3>
+          <p>Critic 几乎乱猜：“这里到目标还要 3 分？”</p>
+        </div>
+        <div class="card">
+          <h3>反复经历后</h3>
+          <p>真实一步代价 + 下一步估计不断纠正当前估计。</p>
+          <div class="bar"><span></span></div>
+        </div>
+      </div>
+      <p>
+        <b>Actor</b> 再选择能让 Critic
+        预计总代价更小的动作。两者交替更新，因此无需人工提供每个状态的正确动作。
+      </p>
+    </section>
+
+    <section class="slide">
+      <span class="tag">第 4 课 · ALAC 比普通 Actor-Critic 多什么</span>
+      <h2>让代价像下坡一样总体下降</h2>
+      <div class="flow card">
+        <div class="node">远离目标<br /><b>L 高</b></div>
+        <span class="arrow">↘</span>
+        <div class="node">逐渐接近<br /><b>L 降低</b></div>
+        <span class="arrow">↘</span>
+        <div class="node critic">到达并停稳<br /><b>L ≈ 0</b></div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Lyapunov 约束</h3>
+          <p>鼓励下一状态的长期代价低于当前状态，减少“越学越不稳定”。</p>
+        </div>
+        <div class="card">
+          <h3>熵约束</h3>
+          <p>早期保留随机探索，避免司机只学会一种差劲动作。</p>
+        </div>
+      </div>
+      <p class="muted">论文中 Critic 被构造成平方输出，保证 L ≥ 0。</p>
+    </section>
+
+    <section class="slide">
+      <span class="tag">第 5 课 · 和 CNN 监督学习对比</span>
+      <h2>看答案学习 vs 看后果学习</h2>
+      <div class="card">
+        <table>
+          <tr>
+            <th>视觉 CNN 监督训练</th>
+            <th>Actor-Critic 强化学习</th>
+          </tr>
+          <tr>
+            <td>数据带人工标签</td>
+            <td>没有正确动作标签</td>
+          </tr>
+          <tr>
+            <td>预测“这是猫”</td>
+            <td>选择“现在怎样驾驶”</td>
+          </tr>
+          <tr>
+            <td>预测错多少就是 loss</td>
+            <td>动作可能很多步以后才显出好坏</td>
+          </tr>
+          <tr>
+            <td>图片通常彼此独立</td>
+            <td>当前动作改变后续状态与数据</td>
+          </tr>
+          <tr>
+            <td>训练集通常固定</td>
+            <td>策略边学边产生新训练数据</td>
+          </tr>
+        </table>
+      </div>
+    </section>
+
+    <section class="slide">
+      <span class="tag">第 6 课 · 为什么还要 MPC</span>
+      <h2>RL 提供远见，MPC 提供规矩</h2>
+      <div class="flow card">
+        <div class="node">SLAM 定位<br />当前位姿</div>
+        <span class="arrow">→</span>
+        <div class="node critic">Critic<br />长期代价地图</div>
+        <span class="arrow">→</span>
+        <div class="node mpc">MPC 优化<br />未来 10 步</div>
+        <span class="arrow">→</span>
+        <div class="node">底层控制器<br />液压与发动机</div>
+      </div>
+      <div class="grid">
+        <div class="card">
+          <h3>Critic 帮 MPC</h3>
+          <p>短预测范围也能看见“这个方向长期是否值得”。</p>
+        </div>
+        <div class="card">
+          <h3>MPC 帮 RL</h3>
+          <p>明确执行速度、加速度、铰接角和障碍物约束。</p>
+        </div>
+      </div>
+      <p class="goal">
+        一句话：RL 学经验，Critic 压缩经验，MPC 安全地使用经验。
+      </p>
+    </section>
+
+    <section class="slide">
+      <span class="tag">第 7 课 · 看懂 TensorBoard</span>
+      <h2>先只看三条线</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>success_rate ↑</h3>
+          <p>
+            最近 100
+            个结束回合中，满足当前课程目标的比例。课程升级后可能突然下降。
+          </p>
+        </div>
+        <div class="card">
+          <h3>ep_rew_mean ↑</h3>
+          <p>越接近 0 越好，因为这里 reward 是负代价。</p>
+        </div>
+        <div class="card">
+          <h3>critic_loss</h3>
+          <p>预测累计代价的误差；看趋势和是否爆炸，不要求一直单调下降。</p>
+        </div>
+        <div class="card">
+          <h3>当前正确运行</h3>
+          <p>在 TensorBoard 只选择 <b>ALAC_9</b>；旧运行包含修复前数据。</p>
+        </div>
+      </div>
+      <p class="warning">
+        最终是否复现成功，要用固定测试目标看轨迹与终端误差，不能只看训练 loss。
+      </p>
+    </section>
+  </main>
+  <nav>
+    <button onclick="move(-1)">← 上一页</button><span id="count">1 / 7</span
+    ><button onclick="move(1)">下一页 →</button>
+  </nav>
+  <script>
+    const slides = [...document.querySelectorAll(".slide")];
+    let i = 0;
+    function show(n) {
+      i = (n + slides.length) % slides.length;
+      slides.forEach((s, j) => s.classList.toggle("active", j === i));
+      document.querySelector("#count").textContent =
+        `${i + 1} / ${slides.length}`;
+      scrollTo(0, 0);
+    }
+    function move(n) {
+      show(i + n);
+    }
+    addEventListener("keydown", (e) => {
+      if (["ArrowRight", " ", "PageDown"].includes(e.key)) move(1);
+      if (["ArrowLeft", "PageUp"].includes(e.key)) move(-1);
+    });
+  </script>
+</html>

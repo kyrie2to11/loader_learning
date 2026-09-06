@@ -1,0 +1,15 @@
+diff --git a/acados_sqp_solver.py b/acados_sqp_solver.py
+index da6aa1b..bc255bd 100644
+--- a/acados_sqp_solver.py
++++ b/acados_sqp_solver.py
+@@ -24,7 +24,9 @@ class AcadosSQPSolver(SymbolicMPCSolver):
+         self.problem = problem
+         self.N = problem.N
+         self.sample_time = problem.h
+-        self.time_steps = np.tile(self.sample_time, self.N+1)
++        self.time_steps = np.tile(
++            self.sample_time, self.N
++        )  # acados >=0.4: length N; old API accepted N+1
+         self.tf = self.time_steps.sum()
+ 
+         self.input_delay = problem.input_delay

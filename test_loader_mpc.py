@@ -1,25 +1,31 @@
-import casadi as cs
-import numpy as np
-import config
-import torch
+import os
 import sys
 import time
+from multiprocessing import Event, Process, Queue
 from queue import Empty
-from PyQt6 import QtWidgets, QtGui, QtCore
-from multiprocessing import Process, Queue, Event
-from mpc_solvers.mpc_problem import SymbolicMPCProblem, SymbolicMPCSolver
-from mpc_solvers.acados_sqp_solver import AcadosSQPSolver
-from loader_rendering.renderer import LoaderRenderer
 
+import casadi as cs
+import numpy as np
+
+import torch
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+import config
+from loader_rendering.renderer import LoaderRenderer
+from mpc_solvers.acados_sqp_solver import AcadosSQPSolver
+from mpc_solvers.mpc_problem import SymbolicMPCProblem, SymbolicMPCSolver
 
 MACHINE_RADIUS = LoaderRenderer.MACHINE_RADIUS
 
 
 class MPCActor:
-    def __init__(self, solver_class: SymbolicMPCSolver, num_obstacles=0, mpc_n=10, mpc_d=0.0):
+    def __init__(
+        self, solver_class: SymbolicMPCSolver, num_obstacles=0, mpc_n=10, mpc_d=0.0
+    ):
         super().__init__()
         fake_inf = 1e7
-        
+
         # States
         x_f = cs.MX.sym("x_f")
         y_f = cs.MX.sym("y_f")
@@ -29,26 +35,39 @@ class MPCActor:
         v_f_ref = cs.MX.sym("v_f_ref")
 
         ocp_x = cs.vertcat(x_f, y_f, theta_f, beta, dot_beta_ref, v_f_ref)
-        lbx_vec = np.array([
-            -fake_inf, -fake_inf, -fake_inf, -config.loader_max_beta, -config.loader_max_dot_beta,
-            config.loader_min_v
-        ])
-        ubx_vec = np.array([
-            fake_inf, fake_inf, fake_inf, config.loader_max_beta, config.loader_max_dot_beta, 
-            config.loader_max_v
-        ])
+        lbx_vec = np.array(
+            [
+                -fake_inf,
+                -fake_inf,
+                -fake_inf,
+                -config.loader_max_beta,
+                -config.loader_max_dot_beta,
+                config.loader_min_v,
+            ]
+        )
+        ubx_vec = np.array(
+            [
+                fake_inf,
+                fake_inf,
+                fake_inf,
+                config.loader_max_beta,
+                config.loader_max_dot_beta,
+                config.loader_max_v,
+            ]
+        )
         ocp_x_slacks = {3: 1000, 4: 1000, 5: 1000}
 
         # Controls
         dot_dot_beta = cs.MX.sym("dot_dot_beta")
         a_f = cs.MX.sym("a_f")
         ocp_u = cs.vertcat(dot_dot_beta, a_f)
-        lbu_vec = np.array([
-            -config.loader_max_dot_dot_beta, -config.loader_max_a
-        ])
-        ubu_vec = np.array([
-            config.loader_max_dot_dot_beta, config.loader_max_a,
-        ])
+        lbu_vec = np.array([-config.loader_max_dot_dot_beta, -config.loader_max_a])
+        ubu_vec = np.array(
+            [
+                config.loader_max_dot_dot_beta,
+                config.loader_max_a,
+            ]
+        )
 
         # Params
         x_goal = cs.MX.sym("x_goal")
@@ -63,10 +82,10 @@ class MPCActor:
             o_r = cs.MX.sym(f"or_{i}")
             ocp_p = cs.vertcat(ocp_p, o_x, o_y, o_r)
             obstacles.append([o_x, o_y, o_r])
-        
+
         # Continuous dynamics:
         omega_f = -(
-            (config.loader_lr * dot_beta_ref + v_f_ref * cs.sin(beta)) 
+            (config.loader_lr * dot_beta_ref + v_f_ref * cs.sin(beta))
             / (config.loader_lf * cs.cos(beta) + config.loader_lr)
         )
         f_expr = cs.vertcat(
@@ -75,9 +94,9 @@ class MPCActor:
             omega_f,
             dot_beta_ref,
             dot_dot_beta,
-            a_f
+            a_f,
         )
-        f = cs.Function('f', [ocp_x, ocp_u, ocp_p], [f_expr])
+        f = cs.Function("f", [ocp_x, ocp_u, ocp_p], [f_expr])
 
         # Initialize parametric obstacles:
         lbg_vec = None
@@ -89,14 +108,16 @@ class MPCActor:
             lbg_vec = np.zeros(num_obstacles)
             ubg_vec = np.repeat(fake_inf, num_obstacles)
             g_expr = cs.vertcat(
-                *[ 
-                    (x_f - o[0])**2 + (y_f - o[1])**2 - (o[2] + MACHINE_RADIUS)**2   
-                    for o in obstacles          
+                *[
+                    (x_f - o[0]) ** 2 + (y_f - o[1]) ** 2 - (o[2] + MACHINE_RADIUS) ** 2
+                    for o in obstacles
                 ]
             )
-            g_fun = cs.Function('g', [ocp_x, ocp_u, ocp_p], [g_expr])
-            t_g_fun = cs.Function('g', [ocp_x, ocp_p], [g_expr])
-            g_slacks = {i: 100 for i in range(num_obstacles)}
+            g_fun = cs.Function("g", [ocp_x, ocp_u, ocp_p], [g_expr])
+            t_g_fun = cs.Function("g", [ocp_x, ocp_p], [g_expr])
+            g_slacks = dict.fromkeys(
+                range(num_obstacles), float(os.environ.get("OBS_SLACK", 100))
+            )
 
         self.problem = SymbolicMPCProblem(
             N=mpc_n,
@@ -118,48 +139,90 @@ class MPCActor:
             terminal_lbg_vec=lbg_vec,
             terminal_ubg_vec=ubg_vec,
             terminal_g_fun=t_g_fun,
-            ocp_t_g_slacks=g_slacks
+            ocp_t_g_slacks=g_slacks,
         )
- 
+
         # Terminal cost with Q network:
         x_err = x_goal - x_f
         y_err = y_goal - y_f
         critic_stage_state = cs.vertcat(
-            cs.cos(theta_f) * x_err + cs.sin(theta_f) * y_err, -cs.sin(theta_f) * x_err + cs.cos(theta_f) * y_err,    
-            cs.sin(theta_goal - theta_f), cs.cos(theta_goal - theta_f), 
-            beta, dot_beta_ref, v_f_ref, 
-            dot_dot_beta / config.loader_max_dot_dot_beta, a_f / config.loader_max_a
-        )       
-        critic_terminal_state = cs.vertcat(
-            cs.cos(theta_f) * x_err + cs.sin(theta_f) * y_err, -cs.sin(theta_f) * x_err + cs.cos(theta_f) * y_err,   
-            cs.sin(theta_goal - theta_f), cs.cos(theta_goal - theta_f), 
-            beta, dot_beta_ref, v_f_ref, 
-            0, 0
+            cs.cos(theta_f) * x_err + cs.sin(theta_f) * y_err,
+            -cs.sin(theta_f) * x_err + cs.cos(theta_f) * y_err,
+            cs.sin(theta_goal - theta_f),
+            cs.cos(theta_goal - theta_f),
+            beta,
+            dot_beta_ref,
+            v_f_ref,
+            dot_dot_beta / config.loader_max_dot_dot_beta,
+            a_f / config.loader_max_a,
         )
-        critic_model = torch.load("loader_critic").eval()
-        self.problem.add_stage_neural_cost(model=critic_model, model_state=critic_stage_state)
-        self.problem.add_terminal_neural_cost(model=critic_model, model_state=critic_terminal_state)
+        critic_terminal_state = cs.vertcat(
+            cs.cos(theta_f) * x_err + cs.sin(theta_f) * y_err,
+            -cs.sin(theta_f) * x_err + cs.cos(theta_f) * y_err,
+            cs.sin(theta_goal - theta_f),
+            cs.cos(theta_goal - theta_f),
+            beta,
+            dot_beta_ref,
+            v_f_ref,
+            0,
+            0,
+        )
+        if os.environ.get("NO_CRITIC") == "1":
+            # Classic quadratic-MPC baseline: replaces the RL critic with weighted
+            # pose-error residuals (same tolerances as the RL cost weights).
+            dx, dy = x_goal - x_f, y_goal - y_f
+            e_long = cs.cos(theta_f) * dx + cs.sin(theta_f) * dy
+            e_lat = -cs.sin(theta_f) * dx + cs.cos(theta_f) * dy
+            residual = cs.vertcat(
+                e_long / 0.1,
+                e_lat / 0.1,
+                cs.sin(theta_goal - theta_f) / np.deg2rad(5),
+                beta / np.deg2rad(5),
+                dot_beta_ref / np.deg2rad(25),
+                v_f_ref,
+            )
+            self.problem.stage_cost_fun = cs.Function(
+                "l_quad", [ocp_x, ocp_u, ocp_p], [residual]
+            )
+            self.problem.terminal_cost_fun = cs.Function(
+                "l_quad_t", [ocp_x, ocp_p], [residual]
+            )
+            # solve() reads a "Lyapunov value" through the neural-cost plumbing;
+            # give it a passthrough so the quadratic baseline works unchanged.
+            self.problem.ocp_x_to_terminal_state_fun = cs.Function(
+                "state_passthru", [ocp_x, ocp_p], [ocp_x]
+            )
+        else:
+            critic_model = torch.load("loader_critic", map_location="cpu").eval()
+            self.problem.add_stage_neural_cost(
+                model=critic_model, model_state=critic_stage_state
+            )
+            self.problem.add_terminal_neural_cost(
+                model=critic_model, model_state=critic_terminal_state
+            )
         self.solver = solver_class(self.problem)
 
     def reset(self):
-        pass            
+        pass
 
-    def solve(self, x0, goal, obstacles) -> np.ndarray:      
+    def solve(self, x0, goal, obstacles) -> np.ndarray:
         params = [np.r_[goal, obstacles.flatten()] for _ in range(self.problem.N + 1)]
-        
+
         t1 = time.time_ns()
         sol_x, sol_u, sol = self.solver.solve(x0, params)
 
         terminal_state = self.problem.ocp_x_to_terminal_state_fun(sol_x[-1], params[-1])
-        lyapunov_value = self.problem.terminal_cost_fun(terminal_state, params[-1]).full()[0]
+        lyapunov_value = self.problem.terminal_cost_fun(
+            terminal_state, params[-1]
+        ).full()[0]
 
         t2 = time.time_ns()
-        solve_time = ((t2-t1)/1e6)
+        solve_time = (t2 - t1) / 1e6
 
         controls = sol_u[0, :2]
-        
+
         return controls, sol_x, solve_time, lyapunov_value
-    
+
 
 class ImageWindow(QtWidgets.QLabel):
     def __init__(self, res, dist, goal_queue, obstacle_queue, frame_queue):
@@ -170,7 +233,9 @@ class ImageWindow(QtWidgets.QLabel):
         self.goal_queue = goal_queue
         self.frame_queue = frame_queue
         self.obstacle_queue = obstacle_queue
-        self.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft
+        )
         self.setMouseTracking(True)
         self.l_click_pos = None
         self.r_click_pos = None
@@ -187,7 +252,9 @@ class ImageWindow(QtWidgets.QLabel):
             if frame.dtype != np.uint8:
                 frame = (255 * np.clip(frame, 0, 1)).astype(np.uint8)
             h, w, _ = frame.shape
-            image = QtGui.QImage(frame.data, w, h, 3 * w, QtGui.QImage.Format.Format_RGB888)
+            image = QtGui.QImage(
+                frame.data, w, h, 3 * w, QtGui.QImage.Format.Format_RGB888
+            )
             pixmap = QtGui.QPixmap.fromImage(image)
             self.setPixmap(pixmap)
         except Empty:
@@ -211,12 +278,14 @@ class ImageWindow(QtWidgets.QLabel):
             world_x = -x_rel * scale
             world_y = y_rel * scale
             return world_x, world_y
-        
+
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
             if self.l_click_pos is not None:
                 release_pos = event.position()
                 x_world, y_world = px_to_world(release_pos.x(), release_pos.y())
-                x_start, y_start = px_to_world(self.l_click_pos.x(), self.l_click_pos.y())
+                x_start, y_start = px_to_world(
+                    self.l_click_pos.x(), self.l_click_pos.y()
+                )
                 dx_world = x_world - x_start
                 dy_world = y_world - y_start
                 theta = np.arctan2(dy_world, dx_world)
@@ -228,15 +297,21 @@ class ImageWindow(QtWidgets.QLabel):
             if self.r_click_pos is not None:
                 release_pos = event.position()
                 x_world, y_world = px_to_world(release_pos.x(), release_pos.y())
-                x_start, y_start = px_to_world(self.r_click_pos.x(), self.r_click_pos.y())
-                radius = np.linalg.norm(np.array([x_world - x_start, y_world - y_start]))
+                x_start, y_start = px_to_world(
+                    self.r_click_pos.x(), self.r_click_pos.y()
+                )
+                radius = np.linalg.norm(
+                    np.array([x_world - x_start, y_world - y_start])
+                )
                 obstacle = np.array([x_start, y_start, radius], dtype=np.float32)
                 self.obstacle_queue.put(obstacle)
                 self.r_click_pos = None
                 event.accept()
 
-    
-def main_loop(res, dist, max_n_obstacles, goal_queue, obstacle_queue, frame_queue, event):
+
+def main_loop(
+    res, dist, max_n_obstacles, goal_queue, obstacle_queue, frame_queue, event
+):
     lr = LoaderRenderer(res, dist, False)
     actor = MPCActor(AcadosSQPSolver, mpc_n=20, num_obstacles=max_n_obstacles)
 
@@ -244,7 +319,9 @@ def main_loop(res, dist, max_n_obstacles, goal_queue, obstacle_queue, frame_queu
     goal = np.zeros(3)
 
     n_obstacles = 0
-    obstacles = np.tile(np.array([1e3, 1e3, 0]), max_n_obstacles).reshape(max_n_obstacles, 3)
+    obstacles = np.tile(np.array([1e3, 1e3, 0]), max_n_obstacles).reshape(
+        max_n_obstacles, 3
+    )
     while True:
         if event.is_set():
             break
@@ -263,8 +340,15 @@ def main_loop(res, dist, max_n_obstacles, goal_queue, obstacle_queue, frame_queu
 
         _, horizon, solve_time, lyapunov_value = actor.solve(x, goal, obstacles)
         x = horizon[1]
-        frame = lr.render_frame(state=x, goal=goal, horizon=horizon[1:, :4], obstacles=obstacles, comparision=[])
+        frame = lr.render_frame(
+            state=x,
+            goal=goal,
+            horizon=horizon[1:, :4],
+            obstacles=obstacles,
+            comparision=[],
+        )
         frame_queue.put(frame)
+
 
 if __name__ == "__main__":
     res = 1024
@@ -275,8 +359,18 @@ if __name__ == "__main__":
     obstacle_queue = Queue()
     frame_queue = Queue()
     kill_event = Event()
-    process = Process(target=main_loop, 
-                      args=(res, dist, max_n_obstacles, goal_queue, obstacle_queue, frame_queue, kill_event))
+    process = Process(
+        target=main_loop,
+        args=(
+            res,
+            dist,
+            max_n_obstacles,
+            goal_queue,
+            obstacle_queue,
+            frame_queue,
+            kill_event,
+        ),
+    )
     process.start()
 
     app = QtWidgets.QApplication([])

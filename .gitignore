@@ -1,0 +1,19 @@
+# Training artifacts and outputs
+RL_outputs/
+loader_actor
+loader_critic
+
+# Environments
+.venv/
+.venv-demo/
+
+# Build/cache
+__pycache__/
+*.pyc
+c_generated_code/
+_l4c_generated/
+codegen_*/
+acados_ocp.json
+
+# OS
+.DS_Store
