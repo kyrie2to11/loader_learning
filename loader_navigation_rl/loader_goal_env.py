@@ -155,9 +155,11 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
             / 10
         )
 
+        # Paper Eq. 9: c = ||We||_p with p = 0.25 (near-constant cost away
+        # from the goal -> time-optimal convergence incentive).
         reward = -np.power(
-            np.dot(np.abs(errors), weights),
-            1 / 2,
+            np.sum(np.power(np.abs(errors) * weights, 0.25), axis=1),
+            1 / 0.25,
         )
 
         # Penalize tight turns near the goal position (within 1-3 times of min turning radius) -> makes the controller less sensitive to modeling errors

@@ -36,11 +36,12 @@ model = ALAC(
     gradient_steps=3,
     train_freq=1,
     gamma=0.99,
-    batch_size=200_000,  # 6GB GPU: 240k barely fits, 250k OOM; upstream uses 300k.
+    batch_size=150_000,  # 6GB GPU + paper net [48,96,144,96,48] has ~1.5x the
+    # activation memory of [96,96,96]; 200k OOMs on the first update.
     policy_kwargs=dict(
         net_arch=dict(
-            pi=[96, 96, 96],
-            qf=[96, 96, 96],
+            pi=[48, 96, 144, 96, 48],  # paper Sec. V-A
+            qf=[48, 96, 144, 96, 48],
         ),
         activation_fn=torch.nn.Softplus,
         share_features_extractor=True,
