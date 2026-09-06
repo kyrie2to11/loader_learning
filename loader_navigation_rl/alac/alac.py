@@ -1,20 +1,24 @@
-from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, ClassVar, TypeVar
 
 import numpy as np
 import torch as th
 from gymnasium import spaces
-from torch.nn import functional as F
-
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
-from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
+from stable_baselines3.common.utils import (
+    get_parameters_by_name,
+    get_schedule_fn,
+    polyak_update,
+    update_learning_rate,
+)
+from torch.nn import functional as F
 
-from loader_navigation_rl.utils import compute_gradient_penalty
 from loader_navigation_rl.alac.policies import Actor, ALACPolicy, MultiInputPolicy
 from loader_navigation_rl.alac.utils import SquaredContinuousCritic
+from loader_navigation_rl.utils import compute_gradient_penalty
 
 SelfALAC = TypeVar("SelfALAC", bound="ALAC")
 
@@ -25,8 +29,7 @@ class ALAC(OffPolicyAlgorithm):
 
     :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
     :param env: The environment to learn from (if registered in Gym, can be str)
-    :param learning_rate: learning rate for adam optimizer,
-        the same learning rate will be used for all networks (Q-Values, Actor and Value function)
+    :param learning_rate: learning rate for the Lagrange optimizers and the actor/critic defaults
         it can be a function of the current progress remaining (from 1 to 0)
     :param buffer_size: size of the replay buffer
     :param learning_starts: how many steps of the model to collect transitions for before learning starts
@@ -69,9 +72,11 @@ class ALAC(OffPolicyAlgorithm):
         Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     :param lambda_gp (float, optional): The weight of the gradient penalty term in the critic loss function (default 0.0)
+    :param actor_learning_rate: optional actor-specific learning rate or schedule
+    :param critic_learning_rate: optional critic-specific learning rate or schedule
     """
 
-    policy_aliases: ClassVar[Dict[str, Type[BasePolicy]]] = {
+    policy_aliases: ClassVar[dict[str, type[BasePolicy]]] = {
         "MultiInputPolicy": MultiInputPolicy,
     }
 
@@ -82,34 +87,36 @@ class ALAC(OffPolicyAlgorithm):
 
     def __init__(
         self,
-        policy: Union[str, Type[ALACPolicy]],
-        env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule] = 3e-4,
-        buffer_size: int = int(1e6), 
+        policy: str | type[ALACPolicy],
+        env: GymEnv | str,
+        learning_rate: float | Schedule = 3e-4,
+        buffer_size: int = 1_000_000,
         learning_starts: int = 100,
         batch_size: int = 256,
         tau: float = 0.005,
         gamma: float = 0.99,
-        train_freq: Union[int, Tuple[int, str]] = 1,
+        train_freq: int | tuple[int, str] = 1,
         gradient_steps: int = 1,
-        action_noise: Optional[ActionNoise] = None,
-        replay_buffer_class: Optional[Type[ReplayBuffer]] = None,
-        replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
+        action_noise: ActionNoise | None = None,
+        replay_buffer_class: type[ReplayBuffer] | None = None,
+        replay_buffer_kwargs: dict[str, Any] | None = None,
         optimize_memory_usage: bool = False,
         target_update_interval: int = 1,
-        target_entropy: Union[str, float] = "auto",
+        target_entropy: str | float = "auto",
         use_sde: bool = False,
         sde_sample_freq: int = -1,
         use_sde_at_warmup: bool = False,
         stats_window_size: int = 100,
-        tensorboard_log: Optional[str] = None,
-        policy_kwargs: Optional[Dict[str, Any]] = None,
+        tensorboard_log: str | None = None,
+        policy_kwargs: dict[str, Any] | None = None,
         verbose: int = 0,
-        seed: Optional[int] = None,
-        device: Union[th.device, str] = "auto",
+        seed: int | None = None,
+        device: th.device | str = "auto",
         _init_setup_model: bool = True,
         lambda_gp: float = 0.0,
-        finetune: bool = False
+        finetune: bool = False,
+        actor_learning_rate: float | Schedule | None = None,
+        critic_learning_rate: float | Schedule | None = None,
     ):
         super().__init__(
             policy,
@@ -143,12 +150,18 @@ class ALAC(OffPolicyAlgorithm):
         self.target_entropy = target_entropy
         self.lambda_gp = lambda_gp
         self.finetune = finetune
-    
+        self.actor_lr_schedule = get_schedule_fn(
+            learning_rate if actor_learning_rate is None else actor_learning_rate
+        )
+        self.critic_lr_schedule = get_schedule_fn(
+            learning_rate if critic_learning_rate is None else critic_learning_rate
+        )
+
         # Optimizers for the lyapunov loss lagrange variables:
         self.log_beta = th.tensor([1.0], device=self.device).requires_grad_(True)
-        self.beta_optimizer: Optional[th.optim.Adam] = None
+        self.beta_optimizer: th.optim.Adam | None = None
         self.log_llambda = th.tensor([1e-2], device=self.device).requires_grad_(True)
-        self.llambda_optimizer: Optional[th.optim.Adam] = None
+        self.llambda_optimizer: th.optim.Adam | None = None
 
         if _init_setup_model:
             self._setup_model()
@@ -158,12 +171,16 @@ class ALAC(OffPolicyAlgorithm):
         self._create_aliases()
         # Running mean and running var
         self.batch_norm_stats = get_parameters_by_name(self.critic, ["running_"])
-        self.batch_norm_stats_target = get_parameters_by_name(self.critic_target, ["running_"])
+        self.batch_norm_stats_target = get_parameters_by_name(
+            self.critic_target, ["running_"]
+        )
 
         # Target entropy is used when learning the entropy coefficient
         if self.target_entropy == "auto":
             # automatically set target entropy if needed
-            self.target_entropy = float(-np.prod(self.env.action_space.shape).astype(np.float32))  # type: ignore
+            self.target_entropy = float(
+                -np.prod(self.env.action_space.shape).astype(np.float32)
+            )  # type: ignore
             print("----------------------------------")
             print(self.target_entropy)
         else:
@@ -171,7 +188,9 @@ class ALAC(OffPolicyAlgorithm):
             # this will also throw an error for unexpected string
             self.target_entropy = float(self.target_entropy)
 
-        self.llambda_optimizer = th.optim.AdamW([self.log_llambda], lr=self.lr_schedule(1))
+        self.llambda_optimizer = th.optim.AdamW(
+            [self.log_llambda], lr=self.lr_schedule(1)
+        )
         self.beta_optimizer = th.optim.AdamW([self.log_beta], lr=self.lr_schedule(1))
 
     def _create_aliases(self) -> None:
@@ -183,17 +202,27 @@ class ALAC(OffPolicyAlgorithm):
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
         # Update optimizers learning rate
-        optimizers = [self.actor.optimizer, self.critic.optimizer]
-
-        # Update learning rate according to lr schedule
-        self._update_learning_rate(optimizers)
+        update_learning_rate(
+            self.actor.optimizer,
+            self.actor_lr_schedule(self._current_progress_remaining),
+        )
+        update_learning_rate(
+            self.critic.optimizer,
+            self.critic_lr_schedule(self._current_progress_remaining),
+        )
 
         actor_losses, critic_losses = [], []
         llambda_losses, beta_losses = [], []
+        assert self.beta_optimizer is not None
+        assert self.llambda_optimizer is not None
+        penalty = None
+        k = lam = np.nan
 
         for gradient_step in range(gradient_steps):
             # Sample replay buffer
-            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)  # type: ignore[union-attr]
+            replay_data = self.replay_buffer.sample(
+                batch_size, env=self._vec_normalize_env
+            )  # type: ignore[union-attr]
 
             # We need to sample because `log_std` may have changed between two gradient steps
             if self.use_sde:
@@ -204,27 +233,54 @@ class ALAC(OffPolicyAlgorithm):
             log_prob = log_prob.reshape(-1, 1)
 
             # Select action according to policy
-            next_actions_pi, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
+            next_actions_pi, next_log_prob = self.actor.action_log_prob(
+                replay_data.next_observations
+            )
             # Compute the next L values
 
-            L_values = th.cat(self.critic_target(replay_data.observations, replay_data.actions), dim=1)
+            L_values = th.cat(
+                self.critic_target(replay_data.observations, replay_data.actions), dim=1
+            )
             L_values, _ = th.max(L_values, dim=1, keepdim=True)
-            next_L_values = th.cat(self.critic_target(replay_data.next_observations, next_actions_pi), dim=1)
+            next_L_values = th.cat(
+                self.critic_target(replay_data.next_observations, next_actions_pi),
+                dim=1,
+            )
             next_L_values, _ = th.max(next_L_values, dim=1, keepdim=True)
-            
+
             # td error
-            target_L_values = -replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_L_values.detach()
+            target_L_values = (
+                -replay_data.rewards
+                + (1 - replay_data.dones) * self.gamma * next_L_values.detach()
+            )
             # Get current L-values estimates for each critic network
             # using action from the replay buffer
-            current_L_values = self.critic(replay_data.observations, replay_data.actions)
+            current_L_values = self.critic(
+                replay_data.observations, replay_data.actions
+            )
 
             # Compute critic loss
-            critic_loss = 0.5 * sum(F.mse_loss(current_L, target_L_values) for current_L in current_L_values)
+            critic_loss = (
+                0.5
+                * th.stack(
+                    [
+                        F.mse_loss(current_L, target_L_values)
+                        for current_L in current_L_values
+                    ]
+                ).sum()
+            )
             if self.lambda_gp > 0.0:
-                penalty = compute_gradient_penalty(self.critic, replay_data.observations, replay_data.actions, lambda_gp=self.lambda_gp)
+                penalty = th.as_tensor(
+                    compute_gradient_penalty(
+                        self.critic,
+                        replay_data.observations,
+                        replay_data.actions,
+                        lambda_gp=self.lambda_gp,
+                    )
+                )
                 critic_loss += penalty
             assert isinstance(critic_loss, th.Tensor)  # for type checker
-            critic_losses.append(critic_loss.item())   # type: ignore[union-attr]
+            critic_losses.append(critic_loss.item())  # type: ignore[union-attr]
 
             # Optimize the critic
             self.critic.optimizer.zero_grad()
@@ -237,13 +293,14 @@ class ALAC(OffPolicyAlgorithm):
 
             k = 1 - llambda.detach().item()
             lam = min(llambda.detach().item(), self.gamma)
-            delta_L = next_L_values - L_values.detach() + k*(L_values.detach() - lam*next_L_values)
+            delta_L = (
+                next_L_values
+                - L_values.detach()
+                + k * (L_values.detach() - lam * next_L_values)
+            )
 
             # Compute actor loss, i.e. solve the inner min problem of the lagrangian:
-            actor_loss = th.mean(
-                beta.detach()*log_prob
-                + llambda.detach()*delta_L
-            )
+            actor_loss = th.mean(beta.detach() * log_prob + llambda.detach() * delta_L)
             self.actor.optimizer.zero_grad()
             actor_loss.backward()
             self.actor.optimizer.step()
@@ -254,7 +311,7 @@ class ALAC(OffPolicyAlgorithm):
             beta_loss.backward()
             self.beta_optimizer.step()
             beta_losses.append(beta_loss.item())
-            
+
             llambda_loss = -llambda * th.mean(delta_L.detach())
             self.llambda_optimizer.zero_grad()
             llambda_loss.backward()
@@ -269,7 +326,9 @@ class ALAC(OffPolicyAlgorithm):
 
             # Update target networks
             if gradient_step % self.target_update_interval == 0:
-                polyak_update(self.critic.parameters(), self.critic_target.parameters(), self.tau)
+                polyak_update(
+                    self.critic.parameters(), self.critic_target.parameters(), self.tau
+                )
                 # Copy running stats, see GH issue #996
                 polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
 
@@ -281,8 +340,10 @@ class ALAC(OffPolicyAlgorithm):
         self.logger.record("train/beta_loss", np.mean(beta_losses))
         self.logger.record("train/lambda_loss", np.mean(llambda_losses))
         self.logger.record("train/beta", th.exp(self.log_beta).cpu().detach().item())
-        self.logger.record("train/lambda", th.exp(self.log_llambda).cpu().detach().item())
-        if self.lambda_gp > 0.0:
+        self.logger.record(
+            "train/lambda", th.exp(self.log_llambda).cpu().detach().item()
+        )
+        if penalty is not None:
             self.logger.record("train/penalty", penalty.cpu().detach().item())
         self.logger.record("train/k", k)
         self.logger.record("train/lam", lam)
@@ -305,20 +366,26 @@ class ALAC(OffPolicyAlgorithm):
             progress_bar=progress_bar,
         )
 
-    def _excluded_save_params(self) -> List[str]:
+    def _excluded_save_params(self) -> list[str]:
         return super()._excluded_save_params() + ["actor", "critic", "critic_target"]  # noqa: RUF005
 
-    def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
-        state_dicts = ["policy", "actor.optimizer", "critic.optimizer", "beta_optimizer", "llambda_optimizer"]
+    def _get_torch_save_params(self) -> tuple[list[str], list[str]]:
+        state_dicts = [
+            "policy",
+            "actor.optimizer",
+            "critic.optimizer",
+            "beta_optimizer",
+            "llambda_optimizer",
+        ]
         saved_pytorch_variables = ["log_beta", "log_llambda"]
         return state_dicts, saved_pytorch_variables
 
     def _sample_action(
         self,
         learning_starts: int,
-        action_noise: Optional[ActionNoise] = None,
+        action_noise: ActionNoise | None = None,
         n_envs: int = 1,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Sample an action according to the exploration policy.
         This is either done by sampling the probability distribution of the policy,
@@ -335,9 +402,15 @@ class ALAC(OffPolicyAlgorithm):
             The two differs when the action space is not normalized (bounds are not [-1, 1]).
         """
         # Select action randomly or according to policy
-        if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup) and not self.finetune:
+        if (
+            self.num_timesteps < learning_starts
+            and not (self.use_sde and self.use_sde_at_warmup)
+            and not self.finetune
+        ):
             # Warmup phase
-            unscaled_action = np.array([self.action_space.sample() for _ in range(n_envs)])
+            unscaled_action = np.array(
+                [self.action_space.sample() for _ in range(n_envs)]
+            )
         else:
             # Note: when using continuous actions,
             # we assume that the policy uses tanh to scale the action

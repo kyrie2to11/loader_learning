@@ -1,13 +1,19 @@
-import pygame
-import torch
-import numpy as np
 from abc import ABC, abstractmethod
+
+import numpy as np
+
+import torch
+
 from gymnasium import spaces
-from torch import nn
+
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim, is_image_space
-from stable_baselines3.common.type_aliases import TensorDict
+
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from typing import Dict
+
+from stable_baselines3.common.type_aliases import TensorDict
+
+from torch import nn
+
 
 class GoalEnv(ABC):
     """
@@ -46,7 +52,7 @@ class GoalEnv(ABC):
                 assert reward == env.compute_reward(ob['achieved_goal'], ob['desired_goal'], info)
         """
         raise NotImplementedError
-    
+
 
 class CustomCombinedExtractor(BaseFeaturesExtractor):
     """
@@ -72,7 +78,7 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         # TODO we do not know features-dim here before going over all the items, so put something there. This is dirty!
         super().__init__(observation_space, features_dim=1)
 
-        extractors: Dict[str, nn.Module] = {}
+        extractors: dict[str, nn.Module] = {}
 
         total_concat_size = 0
         for key, subspace in observation_space.spaces.items():
@@ -100,22 +106,23 @@ class CustomCombinedExtractor(BaseFeaturesExtractor):
         sin_desired, cos_desired = desired_hdg_data[:, 0], desired_hdg_data[:, 1]
 
         # Compute the position error in the "local" / loader longitudinal and lateral axis
-        rotation_matrix = torch.stack([
-            cos_achieved, sin_achieved, 
-            -sin_achieved, cos_achieved
-        ], dim=1).reshape(-1, 2, 2)
-        local_pos_residual = torch.bmm(rotation_matrix, pos_residual.unsqueeze(-1)).squeeze(-1)
+        rotation_matrix = torch.stack(
+            [cos_achieved, sin_achieved, -sin_achieved, cos_achieved], dim=1
+        ).reshape(-1, 2, 2)
+        local_pos_residual = torch.bmm(
+            rotation_matrix, pos_residual.unsqueeze(-1)
+        ).squeeze(-1)
         # Recover the heading error from sin/cos:
         hdg_error = torch.atan2(
             sin_desired * cos_achieved - cos_desired * sin_achieved,
-            cos_desired * cos_achieved + sin_desired * sin_achieved
+            cos_desired * cos_achieved + sin_desired * sin_achieved,
         )
 
         encoded_tensor_list = [
-            local_pos_residual, # longitudinal and lateral error
-            torch.sin(hdg_error.unsqueeze(1)), # sin(heading error)
-            torch.cos(hdg_error.unsqueeze(1)), # cos(heading error)
-            obs # beta, dot_beta, lin_vel
+            local_pos_residual,  # longitudinal and lateral error
+            torch.sin(hdg_error.unsqueeze(1)),  # sin(heading error)
+            torch.cos(hdg_error.unsqueeze(1)),  # cos(heading error)
+            obs,  # beta, dot_beta, lin_vel
         ]
         encoded_tensors = torch.cat(encoded_tensor_list, dim=1)
 
@@ -129,13 +136,15 @@ def compute_gradient_penalty(model, obs_dict, action, lambda_gp=1e-4):
     noise_scale_feature = features.mean(axis=0).unsqueeze(0)
     scale_action = action.mean(axis=0).unsqueeze(0)
     # Perturb the current state and actions slightly to ensure high gradients are penalized in nearby states as well
-    features_uniform = features + 0.05 * noise_scale_feature * (torch.rand_like(features) * 2 - 1)
+    features_uniform = features + 0.05 * noise_scale_feature * (
+        torch.rand_like(features) * 2 - 1
+    )
     actions_uniform = action + 0.05 * scale_action * (torch.rand_like(action) * 2 - 1)
     features_uniform.requires_grad_(True)
     actions_uniform.requires_grad_(True)
 
     qvalue_input = torch.cat([features_uniform, actions_uniform], dim=1)
-    model_outputs = [q_net(qvalue_input)**2 for q_net in model.q_networks]
+    model_outputs = [q_net(qvalue_input) ** 2 for q_net in model.q_networks]
 
     gradient_penalty = 0
     for model_output in model_outputs:
@@ -145,13 +154,18 @@ def compute_gradient_penalty(model, obs_dict, action, lambda_gp=1e-4):
             grad_outputs=torch.ones_like(model_output),
             create_graph=True,
             retain_graph=True,
-            only_inputs=True
+            only_inputs=True,
         )
 
-        gradients = torch.cat([gradients[0].view(gradients[0].size(0), -1),
-                               gradients[1].view(gradients[1].size(0), -1)], dim=1)
-        gradient_norm = torch.sqrt(torch.sum(gradients ** 2, dim=1) + 1e-12)
+        gradients = torch.cat(
+            [
+                gradients[0].view(gradients[0].size(0), -1),
+                gradients[1].view(gradients[1].size(0), -1),
+            ],
+            dim=1,
+        )
+        gradient_norm = torch.sqrt(torch.sum(gradients**2, dim=1) + 1e-12)
         # gradient_penalty += lambda_gp * ((gradient_norm - 1) ** 2).mean()
-        gradient_penalty += lambda_gp * (torch.relu(gradient_norm - 1)**2).mean()
+        gradient_penalty += lambda_gp * (torch.relu(gradient_norm - 1) ** 2).mean()
 
     return gradient_penalty / len(model_outputs)
