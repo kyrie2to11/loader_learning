@@ -6,15 +6,13 @@ from queue import Empty
 
 import casadi as cs
 import numpy as np
-
 import torch
-
+from mpc_solvers.acados_sqp_solver import AcadosSQPSolver
+from mpc_solvers.mpc_problem import SymbolicMPCProblem, SymbolicMPCSolver
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 import config
 from loader_rendering.renderer import LoaderRenderer
-from mpc_solvers.acados_sqp_solver import AcadosSQPSolver
-from mpc_solvers.mpc_problem import SymbolicMPCProblem, SymbolicMPCSolver
 
 MACHINE_RADIUS = LoaderRenderer.MACHINE_RADIUS
 
