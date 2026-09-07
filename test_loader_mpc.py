@@ -21,7 +21,12 @@ MACHINE_RADIUS = LoaderRenderer.MACHINE_RADIUS
 
 class MPCActor:
     def __init__(
-        self, solver_class: SymbolicMPCSolver, num_obstacles=0, mpc_n=10, mpc_d=0.0
+        self,
+        solver_class: SymbolicMPCSolver,
+        num_obstacles=0,
+        mpc_n=10,
+        mpc_d=0.0,
+        critic_path="loader_critic",
     ):
         super().__init__()
         fake_inf = 1e7
@@ -55,7 +60,7 @@ class MPCActor:
                 config.loader_max_v,
             ]
         )
-        ocp_x_slacks = {3: 1000, 4: 1000, 5: 1000}
+        ocp_x_slacks = {3: 1000.0, 4: 1000.0, 5: 1000.0}
 
         # Controls
         dot_dot_beta = cs.MX.sym("dot_dot_beta")
@@ -193,7 +198,7 @@ class MPCActor:
                 "state_passthru", [ocp_x, ocp_p], [ocp_x]
             )
         else:
-            critic_model = torch.load("loader_critic", map_location="cpu").eval()
+            critic_model = torch.load(critic_path, map_location="cpu").eval()
             self.problem.add_stage_neural_cost(
                 model=critic_model, model_state=critic_stage_state
             )

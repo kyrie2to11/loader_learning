@@ -1,0 +1,176 @@
+{
+  "critic_path": "RL_outputs/critic_repofinal.pt",
+  "critic_mtime": "2026-09-07 09:58:44",
+  "scenarios": 20,
+  "converged": 12,
+  "convergence_rate": 0.6,
+  "collisions": 0,
+  "collision_free_rate": 1.0,
+  "converge_time_mean_s": 12.78,
+  "converge_time_median_s": 13.1,
+  "min_clearance_overall_m": Infinity,
+  "no_obstacles": true,
+  "solver_build_s": 5.1,
+  "results": [
+    {
+      "converged": true,
+      "converge_s": 10.8,
+      "final_pos_m": 0.098,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.925
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.139,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 79.494
+    },
+    {
+      "converged": true,
+      "converge_s": 14.600000000000001,
+      "final_pos_m": 0.092,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 78.105
+    },
+    {
+      "converged": true,
+      "converge_s": 15.4,
+      "final_pos_m": 0.097,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.931
+    },
+    {
+      "converged": true,
+      "converge_s": 11.4,
+      "final_pos_m": 0.091,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 78.92
+    },
+    {
+      "converged": true,
+      "converge_s": 15.4,
+      "final_pos_m": 0.098,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.611
+    },
+    {
+      "converged": true,
+      "converge_s": 12.600000000000001,
+      "final_pos_m": 0.099,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.742
+    },
+    {
+      "converged": true,
+      "converge_s": 14.200000000000001,
+      "final_pos_m": 0.093,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.854
+    },
+    {
+      "converged": true,
+      "converge_s": 9.4,
+      "final_pos_m": 0.095,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 79.12
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.111,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 80.262
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.253,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 80.051
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.146,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 80.677
+    },
+    {
+      "converged": true,
+      "converge_s": 10.600000000000001,
+      "final_pos_m": 0.09,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.783
+    },
+    {
+      "converged": true,
+      "converge_s": 13.600000000000001,
+      "final_pos_m": 0.097,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 77.79
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.161,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 80.166
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.158,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 80.315
+    },
+    {
+      "converged": true,
+      "converge_s": 11.200000000000001,
+      "final_pos_m": 0.087,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 78.623
+    },
+    {
+      "converged": true,
+      "converge_s": 14.200000000000001,
+      "final_pos_m": 0.098,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 78.886
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.127,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 78.216
+    },
+    {
+      "converged": false,
+      "converge_s": null,
+      "final_pos_m": 0.176,
+      "min_obstacle_clearance_m": Infinity,
+      "collision": false,
+      "lyapunov_final": 78.853
+    }
+  ]
+}

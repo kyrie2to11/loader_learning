@@ -57,7 +57,7 @@ SCENARIOS = [
 def run_scenario(actor: MPCActor, goal: np.ndarray, obstacles: list) -> dict:
     x = np.zeros(6)
     pad = np.array([[1e3, 1e3, 0]] * (3 - len(obstacles)))
-    obs = np.vstack([obstacles, pad])
+    obs = np.vstack([obstacles, pad]) if obstacles else pad
     min_clear = np.inf
     converged_t = None
     lyap = float("nan")
@@ -83,11 +83,13 @@ def run_scenario(actor: MPCActor, goal: np.ndarray, obstacles: list) -> dict:
 
 def main() -> None:
     critic_path = sys.argv[1] if len(sys.argv) > 1 else "loader_critic"
+    no_obs = os.environ.get("NO_OBS") == "1"
     t0 = time.monotonic()
-    actor = MPCActor(AcadosSQPSolver, mpc_n=20, num_obstacles=3)
+    actor = MPCActor(AcadosSQPSolver, mpc_n=20, num_obstacles=3, critic_path=critic_path)
     build_s = round(time.monotonic() - t0, 1)
 
-    results = [run_scenario(actor, g, o) for g, o in SCENARIOS]
+    scenarios = [(g, []) for g, _ in SCENARIOS] if no_obs else SCENARIOS
+    results = [run_scenario(actor, g, o) for g, o in scenarios]
     n = len(results)
     converged = sum(r["converged"] for r in results)
     collided = sum(r["collision"] for r in results)
@@ -107,11 +109,12 @@ def main() -> None:
         "min_clearance_overall_m": round(
             min(r["min_obstacle_clearance_m"] for r in results), 3
         ),
+        "no_obstacles": no_obs,
         "solver_build_s": build_s,
         "results": results,
     }
     tag = critic_path.replace("loader_critic", "current").replace("/", "_")
-    out = f"RL_outputs/mpc-bench-{tag}-{time.strftime('%H%M%S')}.json"
+    out = f"RL_outputs/mpc-bench-{tag}{'-noobs' if no_obs else ''}-{time.strftime('%H%M%S')}.json"
     with open(out, "w") as f:
         json.dump(report, f, indent=2)
     print(json.dumps({k: v for k, v in report.items() if k != "results"}, indent=2))
