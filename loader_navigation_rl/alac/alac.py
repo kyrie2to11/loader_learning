@@ -117,6 +117,7 @@ class ALAC(OffPolicyAlgorithm):
         finetune: bool = False,
         actor_learning_rate: float | Schedule | None = None,
         critic_learning_rate: float | Schedule | None = None,
+        lagrange_lr: float = 3e-4,
     ):
         super().__init__(
             policy,
@@ -158,9 +159,14 @@ class ALAC(OffPolicyAlgorithm):
         )
 
         # Optimizers for the lyapunov loss lagrange variables:
-        self.log_beta = th.tensor([1.0], device=self.device).requires_grad_(True)
+        # 官方 ALAC (Wang et al.) 用独立的小学习率(3e-4)和普通 Adam:
+        # - 共享 lr(1e-2)时 Adam 抖动 ~0.01/步,远大于平衡点附近的梯度信号,
+        #   λl 会被顶死在上界 clamp=1.0,永远到不了论文的 ~0.8
+        # - AdamW 的 weight_decay 恒把 log_llambda 往 0(即 λl=1)拉
+        self.lagrange_lr = lagrange_lr
+        self.log_beta = th.tensor([np.log(2.0)], device=self.device).requires_grad_(True)
         self.beta_optimizer: th.optim.Adam | None = None
-        self.log_llambda = th.tensor([1e-2], device=self.device).requires_grad_(True)
+        self.log_llambda = th.tensor([0.0], device=self.device).requires_grad_(True)
         self.llambda_optimizer: th.optim.Adam | None = None
 
         if _init_setup_model:
@@ -188,10 +194,10 @@ class ALAC(OffPolicyAlgorithm):
             # this will also throw an error for unexpected string
             self.target_entropy = float(self.target_entropy)
 
-        self.llambda_optimizer = th.optim.AdamW(
-            [self.log_llambda], lr=self.lr_schedule(1)
+        self.llambda_optimizer = th.optim.Adam(
+            [self.log_llambda], lr=self.lagrange_lr
         )
-        self.beta_optimizer = th.optim.AdamW([self.log_beta], lr=self.lr_schedule(1))
+        self.beta_optimizer = th.optim.Adam([self.log_beta], lr=self.lagrange_lr)
 
     def _create_aliases(self) -> None:
         self.actor = self.policy.actor

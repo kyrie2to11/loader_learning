@@ -1,3 +1,5 @@
+from typing import Any
+
 import gymnasium
 import numpy as np
 import torch
@@ -210,7 +212,7 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
         done = terminated | truncated
 
         # Policy might learn an action sequence of [max_a, min_a, max_a, ...] for a constant'ish velocity, this should encourage directly commanding 0 acceleration instead:
-        accel_penalty = 1e-2 * torch.sum(actions**2, axis=1).cpu().numpy()
+        accel_penalty = 1e-2 * torch.sum(actions**2, dim=1).cpu().numpy()
         reward -= accel_penalty
 
         # Collect terminal observation for done envs:
@@ -219,7 +221,7 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
             trunc_not_term = (truncated & ~terminated).cpu().numpy()
             term_not_trunc = (terminated & ~truncated).cpu().numpy()
             for done_idx in done_indices:
-                env_idx = done_idx.item()
+                env_idx = int(done_idx.item())
                 terminal_obs_dict = {}
                 for key, value in tmp_obs.items():
                     terminal_obs_dict[key] = value[env_idx]
@@ -342,7 +344,7 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
 
     def env_method(
         self, method_name: str, *method_args, indices=None, **method_kwargs
-    ) -> list[torch.Any]:
+    ) -> list[Any]:
         if indices is None:
             return [
                 getattr(self, method_name)(*method_args, **method_kwargs)
@@ -354,11 +356,11 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
                 for _ in indices
             ]
 
-    def get_attr(self, attr_name: str, indices=None) -> list[torch.Any]:
+    def get_attr(self, attr_name: str, indices=None) -> list[Any]:
         if indices is None:
             return [getattr(self, attr_name) for _ in range(self.num_envs)]
         else:
             return [getattr(self, attr_name) for _ in indices]
 
-    def set_attr(self, attr_name: str, value: torch.Any, indices=None) -> None:
+    def set_attr(self, attr_name: str, value: Any, indices=None) -> None:
         setattr(self, attr_name, value)

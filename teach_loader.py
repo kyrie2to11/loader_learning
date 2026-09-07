@@ -185,6 +185,12 @@ for stage, (w, steps) in enumerate(weight_schedule, start=1):
     )
     model.learn(steps, callback=checkpoint_callback)
     total_step += steps
+    llambda = float(np.exp(model.log_llambda.item()))
+    beta = float(np.exp(model.log_beta.item()))
+    print(
+        f"[stage {stage}] {total_step}步: λl={llambda:.4f} β={beta:.4f}"
+        + ("  ← 论文停训判据 λl≈0.8 已达成" if llambda <= 0.8 else "  (目标 λl≤0.8,若长期徘徊>0.9见 diagnose_llambda.py)")
+    )
     model.save(f"RL_outputs/{now}/stage_{stage}_final.zip")
     model.save_replay_buffer(f"RL_outputs/{now}/stage_{stage}_buffer.pkl")
     model.replay_buffer.reset()  # Clear the outdated buffer with old rewards, and collect new samples in next iter
