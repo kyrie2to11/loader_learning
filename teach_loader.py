@@ -36,12 +36,11 @@ model = ALAC(
     gradient_steps=3,
     train_freq=1,
     gamma=0.99,
-    batch_size=150_000,  # 6GB GPU + paper net [48,96,144,96,48] has ~1.5x the
-    # activation memory of [96,96,96]; 200k OOMs on the first update.
+    batch_size=120_000,  # 6GB GPU with [96,96,96] nets; paper net needs 150k.
     policy_kwargs=dict(
         net_arch=dict(
-            pi=[48, 96, 144, 96, 48],  # paper Sec. V-A
-            qf=[48, 96, 144, 96, 48],
+            pi=[96, 96, 96],
+            qf=[96, 96, 96],
         ),
         activation_fn=torch.nn.Softplus,
         share_features_extractor=True,
@@ -50,7 +49,7 @@ model = ALAC(
     tensorboard_log="./RL_outputs/debug",
     target_entropy=-2,
     tau=0.05,
-    lambda_gp=0.0,
+    lambda_gp=1e-4,  # experiment B: paper's gradient penalty, repo config otherwise
 )
 
 try:
