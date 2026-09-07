@@ -313,8 +313,8 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
         for i in range(len(indices)):
             frame.append(
                 self.renderer.render_frame(
-                    self.states[i, :4].cpu().numpy(),
-                    self.goals[i, :3].cpu().numpy(),
+                    self.states[i, :4].cpu().numpy().astype(np.float64),
+                    self.goals[i, :3].cpu().numpy().astype(np.float64),
                     horizon,
                     obstacles,
                     comparision,
@@ -329,38 +329,36 @@ class LoaderGoalEnv(VecEnv, GoalEnv):
         pass
 
     def env_is_wrapped(
-        self, wrapper_class: gymnasium.Wrapper, indices=None
+        self, wrapper_class: gymnasium.Wrapper, indices: list[int] | None = None
     ) -> list[bool]:
         if indices is None:
             return [False for _ in range(self.num_envs)]
-        else:
-            return [False for _ in indices]
+        return [False for _ in indices]
 
     def step_async(self, actions: np.ndarray) -> None:
         self.returns = self.step(actions)
 
     def step_wait(self) -> VecEnvStepReturn:
+        assert self.returns is not None, "step_wait 在 step_async 之前被调用"
         return self.returns
 
     def env_method(
-        self, method_name: str, *method_args, indices=None, **method_kwargs
+        self, method_name: str, *method_args, indices: list[int] | None = None, **method_kwargs
     ) -> list[Any]:
         if indices is None:
             return [
                 getattr(self, method_name)(*method_args, **method_kwargs)
                 for _ in range(self.num_envs)
             ]
-        else:
-            return [
-                getattr(self, method_name)(*method_args, **method_kwargs)
-                for _ in indices
-            ]
+        return [
+            getattr(self, method_name)(*method_args, **method_kwargs)
+            for _ in indices
+        ]
 
-    def get_attr(self, attr_name: str, indices=None) -> list[Any]:
+    def get_attr(self, attr_name: str, indices: list[int] | None = None) -> list[Any]:
         if indices is None:
             return [getattr(self, attr_name) for _ in range(self.num_envs)]
-        else:
-            return [getattr(self, attr_name) for _ in indices]
+        return [getattr(self, attr_name) for _ in indices]
 
     def set_attr(self, attr_name: str, value: Any, indices=None) -> None:
         setattr(self, attr_name, value)
