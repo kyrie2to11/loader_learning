@@ -85,7 +85,9 @@ def main() -> None:
     critic_path = sys.argv[1] if len(sys.argv) > 1 else "loader_critic"
     no_obs = os.environ.get("NO_OBS") == "1"
     t0 = time.monotonic()
-    actor = MPCActor(AcadosSQPSolver, mpc_n=20, num_obstacles=3, critic_path=critic_path)
+    actor = MPCActor(
+        AcadosSQPSolver, mpc_n=20, num_obstacles=3, critic_path=critic_path
+    )
     build_s = round(time.monotonic() - t0, 1)
 
     scenarios = [(g, []) for g, _ in SCENARIOS] if no_obs else SCENARIOS

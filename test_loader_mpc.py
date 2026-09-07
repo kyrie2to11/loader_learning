@@ -6,9 +6,7 @@ from queue import Empty
 
 import casadi as cs
 import numpy as np
-
 import torch
-
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 import config

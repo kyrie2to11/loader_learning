@@ -1,62 +1,60 @@
 #!/bin/bash
-# Overnight pipeline: wait for paper-config training -> benchmark -> commit -> push.
-# Logs to RL_outputs/finish-pipeline.log
+# Finish pipeline v2: wait for a FROZEN training PID -> benchmark -> commit -> push.
+# Usage: ./finish_pipeline.sh <pid> <label>
 set -u
 cd /home/jarvis/projects/loader_learning
-LOG=RL_outputs/finish-pipeline.log
+TRAIN_PID="${1:?need pid}"
+LABEL="${2:-run}"
+START_TS=$(date +%s)
+LOG=RL_outputs/finish-pipeline-$LABEL.log
 say() { echo "[$(date '+%F %T')] $*" | tee -a "$LOG"; }
 
-say "pipeline started, waiting for training PID $(cat RL_outputs/train.pid)"
-while ps -p "$(cat RL_outputs/train.pid)" >/dev/null 2>&1; do sleep 300; done
+say "pipeline v2: waiting for PID $TRAIN_PID (label=$LABEL)"
+while ps -p "$TRAIN_PID" >/dev/null 2>&1; do sleep 300; done
 say "training process exited"
 
-FINAL=$(ls -t RL_outputs/*/stage_7_final.zip 2>/dev/null | head -1)
+FINAL=$(find RL_outputs -name stage_7_final.zip -newermt "@$START_TS" 2>/dev/null | head -1)
 if [ -z "$FINAL" ]; then
-  say "WARNING: no stage_7_final.zip found (training may have crashed); loader_critic holds the last saved stage"
+  say "WARNING: no stage_7_final.zip newer than pipeline start; training likely crashed"
 else
-  say "stage 7 final checkpoint: $FINAL"
+  say "final checkpoint: $FINAL"
 fi
-say "loader_critic mtime: $(stat -c %y loader_critic 2>/dev/null || echo missing)"
 
-say "running final obstacle benchmark (slack=10000)"
+say "running benchmark (with obstacles, slack=10000) on final loader_critic"
 OBS_SLACK=10000 ACADOS_SOURCE_DIR=/home/jarvis/projects/acados \
   LD_LIBRARY_PATH=/home/jarvis/projects/acados/lib \
   SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
-  .venv-demo/bin/python benchmark_mpc.py >> "$LOG" 2>&1
-BENCH_JSON=$(ls -t RL_outputs/mpc-bench-current-*.json | head -1)
-say "benchmark saved: $BENCH_JSON"
+  .venv-demo/bin/python benchmark_mpc.py >>"$LOG" 2>&1
+say "running benchmark (obstacle-free)"
+NO_OBS=1 OBS_SLACK=10000 ACADOS_SOURCE_DIR=/home/jarvis/projects/acados \
+  LD_LIBRARY_PATH=/home/jarvis/projects/acados/lib \
+  SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+  .venv-demo/bin/python benchmark_mpc.py >>"$LOG" 2>&1
 
+B1=$(ls -t RL_outputs/mpc-bench-current-*.json | grep -v noobs | head -1)
+B2=$(ls -t RL_outputs/mpc-bench-current-noobs-*.json 2>/dev/null | head -1)
 mkdir -p benchmarks
-cp "$BENCH_JSON" benchmarks/paper-config-final.json
-SUMMARY=$(python3 -c "
-import json
-d = json.load(open('benchmarks/paper-config-final.json'))
-print('convergence %s, collisions %s/20, collision-free %s, converge median %ss' % (
-    d['convergence_rate'], d['collisions'], d['collision_free_rate'],
-    d['converge_time_median_s']))")
-say "benchmark summary: $SUMMARY"
+[ -n "$B1" ] && cp "$B1" "benchmarks/lambdagp-$LABEL-with-obstacles.json"
+[ -n "$B2" ] && cp "$B2" "benchmarks/lambdagp-$LABEL-no-obstacles.json"
+SUM1=$(python3 -c "import json;d=json.load(open('benchmarks/lambdagp-$LABEL-with-obstacles.json'));print(d['convergence_rate'],'conv,',d['collisions'],'collisions')" 2>/dev/null || echo n/a)
+SUM2=$(python3 -c "import json;d=json.load(open('benchmarks/lambdagp-$LABEL-no-obstacles.json'));print(d['convergence_rate'],'conv')" 2>/dev/null || echo n/a)
+say "with-obstacles: $SUM1 | obstacle-free: $SUM2"
 
-git add teach_loader.py loader_navigation_rl/loader_goal_env.py benchmarks/
-git commit -m "Retrain with paper configuration (Eq.9 p=0.25 cost, [48,96,144,96,48] nets)
+git add teach_loader.py loader_navigation_rl/loader_goal_env.py benchmarks/ loader_critic loader_actor 2>/dev/null
+git commit -m "Experiment B: lambda_gp=1e-4 gradient penalty (repo config, batch 120k)
 
-Motivation: with the repo's sqrt cost and [96,96,96] nets, the fully
-trained (35M steps) critic scored WORSE on the obstacle benchmark than
-a mid-curriculum snapshot (5% vs 40% convergence), suggesting the late
-curriculum stages over-constrained the cost landscape.
+Paper Sec. IV-D attributes MPC optimization-landscape smoothness to the
+critic gradient penalty; repo ships lambda_gp=0. This run enables it
+(1e-4) with the repo cost/network otherwise. Batch 120k: the penalty's
+create_graph double-backward plus ~1GB fixed CUDA overhead exceed 6GB
+at larger batches (200k/160k OOMed on the first update).
 
-Changes:
-- compute_reward: c = ||We||_p with p = 0.25 (paper Eq. 9) instead of
-  (sum w*|e|)^(1/2).
-- net_arch pi/qf: [48,96,144,96,48] (paper Sec. V-A). Note ~1.5x
-  activation memory vs [96,96,96]: batch lowered 200k -> 150k on 6GB.
-
-Overnight benchmark result (20 fixed obstacle scenarios, slack=10000):
-$SUMMARY
-Full data: benchmarks/paper-config-final.json
-Baseline comparisons: repo-config final critic 5%, stage-4 snapshot 40%,
-no-critic quadratic baseline 10%." >> "$LOG" 2>&1
+Benchmarks (20 scenarios, slack=10000):
+- with obstacles: $SUM1
+- obstacle-free:  $SUM2
+Baselines: repo-config-no-penalty 5% (obstacles) / 60% (obstacle-free)." >>"$LOG" 2>&1
 say "committed: $(git log --oneline -1)"
 
-git push fork fix/training-correctness-and-mpc-compat >> "$LOG" 2>&1 \
-  && say "pushed to fork" || say "PUSH FAILED - see log"
+git push fork fix/training-correctness-and-mpc-compat >>"$LOG" 2>&1 &&
+  say "pushed to fork" || say "PUSH FAILED"
 say "pipeline done"
